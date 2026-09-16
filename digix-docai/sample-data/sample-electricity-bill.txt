@@ -1,0 +1,7 @@
+SAMPLE ELECTRICITY BILL - FAKE DATA
+Provider: DigiX Energy Demo
+Bill Date: 10/09/2026
+Due Date: 25/09/2026
+Bill Amount: INR 4,850.00
+Account: DEMO-10001
+This file contains no real customer information.
