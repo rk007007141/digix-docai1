@@ -1,13 +1,10 @@
 import re
 from pathlib import Path
-from .ocr_service import extract_text
 from .schemas import DocumentAnalysis
-BAD={"bill","consumer","number","meter","reference","account","date","amount","reading","units","month","due","from","rom","www","wwnerece"}
-def clean(v): return re.sub(r"\s+"," ",v).strip(" :|-") if v else None
 def first(ps,t):
  for p in ps:
   m=re.search(p,t,re.I|re.M)
-  if m:return clean(m.group(1))
+  if m:return re.sub(r"\s+"," ",m.group(1)).strip(" :-|")
 def classify(n,t):
  s=(n+" "+t).lower()
  if any(x in s for x in ("electricity","electric power","power company","gepco","gujranwala","kwh")):return "electricity_bill"
@@ -18,45 +15,54 @@ def classify(n,t):
  if "notice" in s:return "notice"
  return "generic_document"
 def provider(t):
- s=t.lower()
- if "gujranwala electric power company" in s or re.search(r"\bgepco\b",s):return "Gujranwala Electric Power Company"
+ if re.search(r"gujranwala\s+electric\s+power\s+company|\bgepco\b",t,re.I):return "Gujranwala Electric Power Company"
  for x in ("MSEDCL","Adani Electricity","Tata Power","Reliance","Torrent Power"):
-  if x.lower() in s:return x
-def ident(labels,t,digits=4):
+  if x.lower() in t.lower():return x
+def valid_id(v):
+ if not v:return None
+ v=v.strip(); digits=sum(c.isdigit() for c in v); al=sum(c.isalnum() for c in v)
+ return v if digits>=4 and al and digits/al>=.5 and len(v)<=30 else None
+def ident(labels,t):
  L="|".join(re.escape(x) for x in labels)
- for p in (rf"(?:{L})\s*(?:no\.?|number|#|id)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-/]{{3,29}})",rf"(?:{L}).{{0,10}}?\b([0-9][0-9\-]{{3,29}})\b"):
-  for m in re.finditer(p,t,re.I):
-   v=clean(m.group(1)); low=v.lower()
-   ds=sum(c.isdigit() for c in v); an=sum(c.isalnum() for c in v)
-   if ds>=digits and (not an or ds/an>=.45) and not any(re.search(rf"\b{re.escape(w)}\b",low) for w in BAD):return v
+ for m in re.finditer(rf"(?:{L})\s*(?:no\.?|number|#|id)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-/]{{3,29}})",t,re.I):
+  v=valid_id(m.group(1))
+  if v:return v
 def date(labels,t):
  L="|".join(re.escape(x) for x in labels)
  return first([rf"(?:{L})\s*[:\-]?\s*(\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}})",rf"(?:{L})\s*[:\-]?\s*(\d{{4}}-\d{{1,2}}-\d{{1,2}})"],t)
-def amount(t):
- for p in (r"(?:amount\s*due|bill\s*amount|payable\s*amount|net\s*amount|total\s*amount|grand\s*total|amount\s*payable|payable|total)\s*[:\-]?\s*(?:PKR|Rs\.?|₹|INR)?\s*([0-9][0-9,]*(?:\.\d{1,2})?)",r"(?:PKR|Rs\.?|₹|INR)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"):
-  m=re.search(p,t,re.I)
-  if m:
-   try:
-    n=float(m.group(1).replace(",",""))
-    if 0<n<100000000:return n
-   except:pass
+def money(labels,t):
+ L="|".join(re.escape(x) for x in labels)
+ v=first([rf"(?:{L})\s*[:\-]?\s*(?:PKR|Rs\.?|₹|INR)?\s*([0-9][0-9,]*(?:\.\d{{1,2}})?)"],t)
+ try:return float(v.replace(",","")) if v else None
+ except:return None
 def num(labels,t):
  L="|".join(re.escape(x) for x in labels)
  return first([rf"(?:{L})\s*[:\-]?\s*([0-9][0-9,.]*)"],t)
-def analyze(filename,content_type,data,text_override=None):
- t=text_override if text_override is not None else extract_text(filename,content_type,data); readable=bool(t.strip())
- typ=classify(filename,t); prov=provider(t); amt=amount(t); due=date(("due date","pay by","last date"),t); dd=date(("bill date","invoice date","issue date"),t)
- cons=ident(("consumer number","consumer no","consumer id","consumer","account number"),t,5); ref=ident(("reference number","reference no","ref no"),t,5); meter=ident(("meter number","meter no","meter id"),t,4)
- month=first([r"(?:bill\s*month|billing\s*month)\s*[:\-]?\s*([A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{4})"],t)
- units=num(("units consumed","consumption","units","kwh"),t); cur=num(("current reading","present reading"),t); prev=num(("previous reading","prev reading"),t)
- curr="INR" if re.search(r"\bINR\b|₹",t,re.I) else ("PKR" if re.search(r"\bPKR\b|\bRs\.?",t,re.I) or prov=="Gujranwala Electric Power Company" else None)
- f={"filename":filename,"document_type":typ,"provider":prov,"consumer_number":cons,"reference_number":ref,"meter_number":meter,"bill_month":month,"document_date":dd,"due_date":due,"amount":amt,"currency":curr,"units_consumed":units,"current_reading":cur,"previous_reading":prev}
- f={k:v for k,v in f.items() if v not in (None,"")}; detected=sum(v not in (None,"") for v in (prov,cons,ref,meter,month,dd,due,amt,units,cur,prev))
- conf=.35 if not readable else (.70 if typ=="generic_document" else min(.97,.84+min(detected,6)*.02))
- summary=f"This appears to be an {typ.replace('_',' ')}. {detected} key field(s) passed validation and were extracted." if readable else f"{Path(filename).name} could not be read as text."
- acts=["Review the extracted information for accuracy"]
- if due:acts.append(f"Take required action before {due}")
- if amt is not None:acts.append("Verify the payable amount before payment")
- if cons or ref:acts.append("Use the validated consumer/reference number when verifying the document")
- acts.append("Ask questions about this document below")
- return DocumentAnalysis(document_type=typ,filename=filename,provider=prov,document_date=dd,due_date=due,amount=amt,currency=curr,summary=summary,actions=acts,confidence=conf,extracted_fields=f)
+def add(fields,status,k,v,source="label-value",conf=.88):
+ if v not in (None,""):
+  fields[k]=v;status[k]={"status":"extracted","confidence":conf,"source":source}
+ else:status[k]={"status":"not_reliably_read","confidence":0.0,"source":source}
+def analyze(filename,content_type,data,text_override=None,words=None):
+ t=text_override or "";typ=classify(filename,t);p=provider(t);fields={};status={}
+ add(fields,status,"filename",filename,"upload",1);add(fields,status,"document_type",typ,"classifier",.9 if typ!="generic_document" else .7);add(fields,status,"provider",p,"OCR",.95 if p else 0)
+ add(fields,status,"consumer_number",ident(("consumer number","consumer no","consumer id","consumer","account number"),t))
+ add(fields,status,"reference_number",ident(("reference number","reference no","ref no"),t))
+ add(fields,status,"meter_number",ident(("meter number","meter no","meter id"),t))
+ add(fields,status,"bill_month",first([r"(?:bill\s*month|billing\s*month)\s*[:\-]?\s*([A-Za-z]{3,9}\s+\d{4}|\d{1,2}[/-]\d{4})"],t))
+ dd=date(("bill date","invoice date","issue date"),t);due=date(("due date","pay by","last date"),t)
+ add(fields,status,"document_date",dd);add(fields,status,"due_date",due)
+ add(fields,status,"units_consumed",num(("units consumed","consumption","units","kwh"),t))
+ add(fields,status,"previous_reading",num(("previous reading","prev reading"),t));add(fields,status,"current_reading",num(("current reading","present reading"),t))
+ add(fields,status,"current_charges",money(("current charges","current bill","current amount"),t))
+ add(fields,status,"taxes_surcharges",money(("taxes","surcharge","tax","gst"),t))
+ add(fields,status,"arrears",money(("arrears","previous balance","outstanding"),t))
+ before=money(("amount before due date","payable within due date","amount due","bill amount","total amount"),t)
+ after=money(("amount after due date","payable after due date","late payment amount"),t)
+ add(fields,status,"amount_before_due",before);add(fields,status,"amount_after_due",after)
+ currency="INR" if re.search(r"\bINR\b|₹",t,re.I) else ("PKR" if re.search(r"\bPKR\b|\bRs\.?",t,re.I) or p else None);add(fields,status,"currency",currency,"currency detection",.95 if currency else 0)
+ extracted=sum(1 for k,v in status.items() if v["status"]=="extracted" and k not in ("filename","document_type"))
+ conf=min(.97,.72+.03*min(extracted,7)) if t.strip() else .35
+ summary=f"{typ.replace('_',' ').title()} detected. {extracted} information field(s) were reliably extracted; unreadable fields are explicitly marked instead of guessed."
+ actions=["Review extracted values against the original document","Ask questions about the document below"]
+ if due:actions.append(f"Take required action before {due}")
+ return DocumentAnalysis(document_type=typ,filename=filename,provider=p,document_date=dd,due_date=due,amount=before,currency=currency,summary=summary,actions=actions,confidence=conf,extracted_fields=fields,field_status=status)
