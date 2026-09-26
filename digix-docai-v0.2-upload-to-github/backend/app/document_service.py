@@ -57,8 +57,10 @@ def numeric(labels,text):
     v=first([rf"(?:{label})\s*[:\-]?\s*([0-9][0-9,.]*)"],text)
     return v
 
-def analyze(filename,content_type,data):
-    text=extract_text(filename,content_type,data)
+def analyze(filename, content_type, data, text_override=None):
+    text = text_override if text_override is not None else extract_text(
+        filename, content_type, data
+    )
     readable=bool(text.strip())
     dtype=classify(filename,text)
     prov=provider(text)
