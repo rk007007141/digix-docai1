@@ -1,1 +1,0 @@
-.askrow{display:flex;gap:12px;margin-top:16px}.askrow input{flex:1;padding:14px 16px;border:1px solid #d9dce5;border-radius:12px;font-size:16px}.askrow button{min-width:110px}.answer{margin-top:18px;padding:18px;border-radius:14px;background:#f6f7fb}@media(max-width:650px){.askrow{flex-direction:column}}
