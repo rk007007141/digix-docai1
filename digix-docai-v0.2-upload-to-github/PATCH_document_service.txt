@@ -1,7 +1,0 @@
-IMPORTANT: in backend/app/document_service.py change:
-def analyze(filename,content_type,data):
-    text=extract_text(filename,content_type,data)
-TO:
-def analyze(filename,content_type,data,text_override=None):
-    text=text_override if text_override is not None else extract_text(filename,content_type,data)
-This prevents OCR from running twice in v0.3.
