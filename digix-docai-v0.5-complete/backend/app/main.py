@@ -1,4 +1,6 @@
+from time import perf_counter
 from uuid import uuid4
+
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,7 +10,7 @@ from .ocr_service import extract_document
 from .qa_service import answer_question
 from .schemas import DocumentAnalysis, QuestionAnswer, QuestionRequest
 
-app = FastAPI(title="DigiX DocAI API", version="0.5.0")
+app = FastAPI(title="DigiX DocAI API", version="0.5.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +25,7 @@ DOCUMENTS = {}
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "digix-docai", "version": "0.5.0"}
+    return {"status": "ok", "service": "digix-docai", "version": "0.5.1"}
 
 @app.post("/api/v1/documents/analyze", response_model=DocumentAnalysis)
 async def analyze_document(file: UploadFile = File(...)):
@@ -35,6 +37,8 @@ async def analyze_document(file: UploadFile = File(...)):
         raise HTTPException(400, "The uploaded file is empty.")
     if len(data) > settings.max_upload_mb * 1024 * 1024:
         raise HTTPException(413, f"Maximum file size is {settings.max_upload_mb} MB.")
+
+    started = perf_counter()
 
     try:
         filename = file.filename or "document"
@@ -52,6 +56,20 @@ async def analyze_document(file: UploadFile = File(...)):
 
         document_id = str(uuid4())
         result.document_id = document_id
+        result.content_type = content_type
+        result.file_size_bytes = len(data)
+        result.processing_time_ms = round((perf_counter() - started) * 1000)
+        result.ocr_word_count = len(ocr.words)
+        result.ocr_line_count = len([line for line in ocr.text.splitlines() if line.strip()])
+        result.raw_text = ocr.text
+
+        ignored = {"filename", "document_type"}
+        target_keys = [key for key in result.field_status if key not in ignored]
+        result.target_field_count = len(target_keys)
+        result.extracted_count = sum(
+            1 for key in target_keys if result.field_status[key].status == "extracted"
+        )
+
         DOCUMENTS[document_id] = {
             "text": ocr.text,
             "fields": result.extracted_fields,
@@ -59,6 +77,8 @@ async def analyze_document(file: UploadFile = File(...)):
         }
         return result
 
+    except HTTPException:
+        raise
     except Exception as exc:
         print("PROCESSING ERROR:", repr(exc))
         raise HTTPException(422, "The document could not be processed.")
