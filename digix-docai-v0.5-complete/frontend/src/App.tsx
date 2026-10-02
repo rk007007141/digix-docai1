@@ -18,6 +18,14 @@ type Analysis = {
   field_status: Record<string, FieldStatus>;
   actions: string[];
   document_id?: string;
+  content_type?: string | null;
+  file_size_bytes?: number;
+  processing_time_ms?: number;
+  ocr_word_count?: number;
+  ocr_line_count?: number;
+  extracted_count?: number;
+  target_field_count?: number;
+  raw_text?: string;
 };
 
 type Answer = {
@@ -29,15 +37,33 @@ type Answer = {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-const FIELD_ORDER = [
+const PREFERRED_ORDER = [
   "provider", "consumer_number", "reference_number", "meter_number", "tariff",
   "bill_month", "billing_period", "document_date", "due_date", "units_consumed",
   "previous_reading", "current_reading", "current_charges", "taxes_surcharges",
   "arrears", "amount_before_due", "amount_after_due", "currency"
 ];
 
-const label = (key: string) => key.replaceAll("_", " ");
-const pct = (n: number) => `${Math.round(n * 100)}%`;
+function label(key: string) {
+  return key.replace(/_/g, " ");
+}
+
+function pct(value?: number) {
+  return `${Math.round((value || 0) * 100)}%`;
+}
+
+function fileSize(bytes?: number) {
+  if (!bytes) return "0 KB";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function displayValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -50,15 +76,31 @@ export default function App() {
 
   const visibleFields = useMemo(() => {
     if (!result) return [];
-    return FIELD_ORDER.map(key => ({
+
+    const allKeys = new Set<string>([
+      ...PREFERRED_ORDER,
+      ...Object.keys(result.field_status || {}),
+      ...Object.keys(result.extracted_fields || {})
+    ]);
+
+    allKeys.delete("filename");
+    allKeys.delete("document_type");
+
+    const preferred = PREFERRED_ORDER.filter(key => allKeys.has(key));
+    const extras = [...allKeys]
+      .filter(key => !PREFERRED_ORDER.includes(key))
+      .sort();
+
+    return [...preferred, ...extras].map(key => ({
       key,
-      value: result.extracted_fields[key],
-      status: result.field_status[key]
+      value: result.extracted_fields?.[key],
+      status: result.field_status?.[key]
     }));
   }, [result]);
 
   async function analyze() {
     if (!file) return;
+
     setBusy(true);
     setError("");
     setResult(null);
@@ -72,6 +114,7 @@ export default function App() {
         method: "POST",
         body
       });
+
       if (!response.ok) throw new Error(await response.text());
       setResult(await response.json());
     } catch (e) {
@@ -83,6 +126,7 @@ export default function App() {
 
   async function ask() {
     if (!result?.document_id || !question.trim()) return;
+
     setAsking(true);
     setError("");
     setAnswer(null);
@@ -96,6 +140,7 @@ export default function App() {
           question
         })
       });
+
       if (!response.ok) throw new Error(await response.text());
       setAnswer(await response.json());
     } catch (e) {
@@ -109,18 +154,19 @@ export default function App() {
     <main>
       <header>
         <b>DigiX <i>DocAI</i></b>
-        <span>v0.5 Document Intelligence</span>
+        <span>v0.5.1 · All Details</span>
       </header>
 
       <section className="hero">
         <small>DOCUMENT INTELLIGENCE</small>
         <h1>Upload anything.<br />Understand it. <em>Ask it. Act on it.</em></h1>
-        <p>Layout-aware extraction, field validation and grounded document Q&amp;A.</p>
+        <p>View every extracted field, confidence, source, evidence and OCR detail.</p>
       </section>
 
       <section className="card upload">
         <h2>Analyze a document</h2>
         <p>PDF, JPG or PNG · maximum 10 MB</p>
+
         <label className="filePicker">
           <input
             type="file"
@@ -129,9 +175,11 @@ export default function App() {
           />
           {file ? file.name : "Choose document"}
         </label>
+
         <button disabled={!file || busy} onClick={analyze}>
           {busy ? "Reading and understanding document…" : "Analyze document"}
         </button>
+
         {error && <p className="error">{error}</p>}
       </section>
 
@@ -141,7 +189,9 @@ export default function App() {
             <div>
               <small>ANALYSIS</small>
               <h2>{label(result.document_type)}</h2>
+              <p className="muted">{result.summary}</p>
             </div>
+
             <div className="metrics">
               <div><small>TYPE CONFIDENCE</small><b>{pct(result.confidence)}</b></div>
               <div><small>OCR QUALITY</small><b>{pct(result.ocr_quality)}</b></div>
@@ -149,24 +199,44 @@ export default function App() {
             </div>
           </div>
 
-          <p>{result.summary}</p>
+          <h3>Document & processing details</h3>
+          <div className="metaGrid">
+            <div><small>Filename</small><b>{result.filename}</b></div>
+            <div><small>Document type</small><b>{label(result.document_type)}</b></div>
+            <div><small>Content type</small><b>{result.content_type || "—"}</b></div>
+            <div><small>File size</small><b>{fileSize(result.file_size_bytes)}</b></div>
+            <div><small>Processing time</small><b>{result.processing_time_ms ?? 0} ms</b></div>
+            <div><small>OCR words</small><b>{result.ocr_word_count ?? 0}</b></div>
+            <div><small>OCR lines</small><b>{result.ocr_line_count ?? 0}</b></div>
+            <div><small>Extracted fields</small><b>{result.extracted_count ?? 0} / {result.target_field_count ?? visibleFields.length}</b></div>
+            <div><small>Document ID</small><b className="mono">{result.document_id || "—"}</b></div>
+          </div>
 
-          <h3>Document information</h3>
+          <h3>All document fields</h3>
+          <p className="muted">
+            Every known target field is shown. Fields that cannot be read reliably remain visible instead of disappearing.
+          </p>
+
           <div className="fieldGrid">
-            {visibleFields.map(({key, value, status}) => {
-              const extracted =
-                status?.status === "extracted" &&
-                value !== undefined && value !== null && value !== "";
+            {visibleFields.map(({ key, value, status }) => {
+              const extracted = status?.status === "extracted" && value !== undefined && value !== null && value !== "";
 
               return <div className={`field ${extracted ? "fieldGood" : "fieldMissing"}`} key={key}>
                 <div className="fieldHead">
                   <small>{label(key)}</small>
                   {extracted
-                    ? <span className="good">✓ {pct(status.confidence)}</span>
+                    ? <span className="good">✓ {pct(status?.confidence)}</span>
                     : <span className="missing">Not reliably read</span>}
                 </div>
-                <b>{extracted ? String(value) : "—"}</b>
-                {extracted && status.evidence && <details>
+
+                <b>{displayValue(value)}</b>
+
+                <div className="fieldMeta">
+                  <span>Source: {status?.source || "none"}</span>
+                  <span>Confidence: {pct(status?.confidence)}</span>
+                </div>
+
+                {status?.evidence && <details>
                   <summary>Evidence</summary>
                   <p>{status.evidence}</p>
                 </details>}
@@ -175,18 +245,26 @@ export default function App() {
           </div>
 
           <h3>Recommended actions</h3>
-          {result.actions.map((x, i) =>
-            <p className="action" key={i}><b>{i + 1}</b> {x}</p>
+          {result.actions.map((action, index) =>
+            <p className="action" key={index}><b>{index + 1}</b> {action}</p>
           )}
+
+          <details className="rawPanel">
+            <summary>Raw OCR text — show everything read from the document</summary>
+            <p className="warning">This may contain personal or sensitive document information.</p>
+            <pre>{result.raw_text || "No raw OCR text available."}</pre>
+          </details>
+
+          <details className="rawPanel">
+            <summary>Full API result — JSON</summary>
+            <pre>{JSON.stringify(result, null, 2)}</pre>
+          </details>
         </section>
 
         <section className="card">
           <small>ASK YOUR DOCUMENT</small>
           <h2>What would you like to know?</h2>
-          <p className="muted">
-            Ask “What is the due date?”, “What is the consumer number?” or
-            “What is the amount before the due date?”
-          </p>
+          <p className="muted">Ask a specific question such as “What is the due date?” or “What is the amount before the due date?”</p>
 
           <div className="askrow">
             <input
@@ -202,14 +280,10 @@ export default function App() {
 
           {answer && <div className={answer.grounded ? "answer" : "answer notFound"}>
             <b>{answer.answer}</b>
-            <p>
-              {answer.grounded
-                ? `Grounded answer · ${pct(answer.confidence)} confidence`
-                : "No reliable answer was extracted."}
-            </p>
+            <p>{answer.grounded ? `Grounded answer · ${pct(answer.confidence)} confidence` : "No reliable answer was extracted."}</p>
             {answer.evidence.length > 0 && <details>
               <summary>Evidence</summary>
-              {answer.evidence.map((x, i) => <p key={i}>{x}</p>)}
+              {answer.evidence.map((item, index) => <p key={index}>{item}</p>)}
             </details>}
           </div>}
         </section>
