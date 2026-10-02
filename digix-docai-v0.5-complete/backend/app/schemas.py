@@ -24,6 +24,15 @@ class DocumentAnalysis(BaseModel):
     field_status: dict[str, FieldStatus]
     document_id: str | None = None
 
+    content_type: str | None = None
+    file_size_bytes: int = 0
+    processing_time_ms: int = 0
+    ocr_word_count: int = 0
+    ocr_line_count: int = 0
+    extracted_count: int = 0
+    target_field_count: int = 0
+    raw_text: str = ""
+
 class QuestionRequest(BaseModel):
     document_id: str
     question: str
