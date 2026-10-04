@@ -10,7 +10,7 @@ from .ocr_service import extract_document
 from .qa_service import answer_question
 from .schemas import DocumentAnalysis, QuestionAnswer, QuestionRequest
 
-app = FastAPI(title="DigiX DocAI API", version="0.5.1")
+app = FastAPI(title="DigiX DocAI API", version="0.5.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,7 +25,7 @@ DOCUMENTS = {}
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "digix-docai", "version": "0.5.1"}
+    return {"status": "ok", "service": "digix-docai", "version": "0.5.2"}
 
 @app.post("/api/v1/documents/analyze", response_model=DocumentAnalysis)
 async def analyze_document(file: UploadFile = File(...)):
@@ -69,11 +69,13 @@ async def analyze_document(file: UploadFile = File(...)):
         result.extracted_count = sum(
             1 for key in target_keys if result.field_status[key].status == "extracted"
         )
+        result.candidate_count = sum(len(items) for items in result.detected_candidates.values())
 
         DOCUMENTS[document_id] = {
             "text": ocr.text,
             "fields": result.extracted_fields,
             "field_status": result.field_status,
+            "detected_candidates": result.detected_candidates,
         }
         return result
 
@@ -97,6 +99,7 @@ def ask_document(req: QuestionRequest):
         doc["text"],
         doc["fields"],
         doc["field_status"],
+        doc["detected_candidates"],
     )
 
     return QuestionAnswer(
